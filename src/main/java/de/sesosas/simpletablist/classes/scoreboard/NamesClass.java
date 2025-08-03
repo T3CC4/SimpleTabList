@@ -1,5 +1,6 @@
 package de.sesosas.simpletablist.classes.scoreboard;
 
+import de.sesosas.simpletablist.SimpleTabList;
 import de.sesosas.simpletablist.api.luckperms.Group;
 import de.sesosas.simpletablist.api.luckperms.Permission;
 import de.sesosas.simpletablist.api.utils.StringUtil;
@@ -55,7 +56,7 @@ public class NamesClass {
         // Remove player from any existing teams on the main scoreboard
         for (Team team : mainScoreboard.getTeams()) {
             if (team.hasEntry(player.getName())) {
-                team.removeEntry(player.getName());
+                Bukkit.getScheduler().runTask(SimpleTabList.getPlugin(), () -> team.removeEntry(player.getName()));
             }
         }
 
@@ -75,8 +76,8 @@ public class NamesClass {
         if (team == null) {
             team = mainScoreboard.registerNewTeam(teamName);
         }
-
-        team.addEntry(player.getName());
+        Team finalTeam = team;
+        Bukkit.getScheduler().runTask(SimpleTabList.getPlugin(), () -> finalTeam.addEntry(player.getName()));
 
         // Important: we're NOT setting player.setScoreboard(scoreboard) here
         // That's what was causing the conflict with other plugins
