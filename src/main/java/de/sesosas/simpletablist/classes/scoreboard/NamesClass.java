@@ -35,7 +35,7 @@ public class NamesClass {
         sortPlayer(player);
     }
 
-    private static void sortPlayer(Player player) {
+    public static void sortPlayer(Player player) {
         if (CurrentConfig.getBoolean("Names.Sorting.Enable")) {
             boolean isAscending = CurrentConfig.getBoolean("Names.Sorting.Ascending");
             String sortType = CurrentConfig.getString("Names.Sorting.Type");

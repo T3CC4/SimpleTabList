@@ -15,6 +15,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 
+/**
+ * Thread utility with thread pool for better resource control
+ */
 public class ThreadUtil {
 
     private static Plugin plugin;
@@ -22,7 +25,6 @@ public class ThreadUtil {
     private static ScheduledExecutorService scheduledExecutor;
     private static final Map<String, ScheduledFuture<?>> scheduledTasks = new HashMap<>();
     private static final Map<String, CompletableFuture<?>> runningTasks = new HashMap<>();
-    // Track if executors need to be lazily initialized
     private static boolean executorsShutdown = false;
 
     /**
@@ -31,15 +33,12 @@ public class ThreadUtil {
      */
     public static void initialize(Plugin pluginInstance) {
         plugin = pluginInstance;
-
-        // Initialize thread pools immediately but they will be lazily re-initialized if needed
         createExecutors();
-
-        Bukkit.getLogger().info("[SimpleTabList] Thread utilities initialized");
+        Bukkit.getLogger().info("[SimpleTabList] Optimized thread utilities initialized");
     }
 
     /**
-     * Create executor services if they don't exist
+     * Create executor services with fixed thread pools for better control
      */
     private static synchronized void createExecutors() {
         if (executor == null || executor.isShutdown() || scheduledExecutor == null || scheduledExecutor.isShutdown()) {
@@ -51,13 +50,17 @@ public class ThreadUtil {
                 public Thread newThread(Runnable r) {
                     Thread thread = new Thread(r);
                     thread.setName("STL-Worker-" + count.incrementAndGet());
-                    thread.setDaemon(true); // Mark as daemon so they don't prevent JVM shutdown
+                    thread.setDaemon(true);
+                    thread.setPriority(Thread.NORM_PRIORITY - 1); // Slightly lower priority
                     return thread;
                 }
             };
 
             if (executor == null || executor.isShutdown()) {
-                executor = Executors.newCachedThreadPool(threadFactory);
+                // Use FixedThreadPool instead of CachedThreadPool for better control
+                int poolSize = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
+                executor = Executors.newFixedThreadPool(poolSize, threadFactory);
+                Bukkit.getLogger().info("[SimpleTabList] Created fixed thread pool with " + poolSize + " threads");
             }
 
             if (scheduledExecutor == null || scheduledExecutor.isShutdown()) {
@@ -65,7 +68,6 @@ public class ThreadUtil {
             }
 
             executorsShutdown = false;
-            Bukkit.getLogger().info("[SimpleTabList] Thread pools initialized");
         }
     }
 
@@ -128,16 +130,12 @@ public class ThreadUtil {
 
         ScheduledFuture<?> future = scheduledExecutor.schedule(() -> {
             try {
-                // Check if server has players before running
                 if (!Bukkit.getOnlinePlayers().isEmpty() || taskName.startsWith("system_")) {
-                    // Run on the Bukkit main thread if plugin is still enabled
                     if (plugin.isEnabled()) {
                         Bukkit.getScheduler().runTask(plugin, task);
                     } else {
                         task.run();
                     }
-                } else {
-                    Bukkit.getLogger().fine("[SimpleTabList] Skipping scheduled task " + taskName + " - no players online");
                 }
             } catch (Exception e) {
                 Bukkit.getLogger().log(Level.SEVERE, "[SimpleTabList] Error in scheduled task: " + taskName, e);
@@ -161,13 +159,10 @@ public class ThreadUtil {
 
         ScheduledFuture<?> future = scheduledExecutor.scheduleAtFixedRate(() -> {
             try {
-                // Only run the task if there are players online or it's a system task
                 if (!Bukkit.getOnlinePlayers().isEmpty() || taskName.startsWith("system_")) {
-                    // Run on the Bukkit main thread if plugin is still enabled
                     if (plugin.isEnabled()) {
                         Bukkit.getScheduler().runTask(plugin, task);
                     } else {
-                        // Cancel this task if plugin is no longer enabled
                         cancelTask(taskName);
                     }
                 }
@@ -187,14 +182,12 @@ public class ThreadUtil {
     public static boolean cancelTask(String taskName) {
         boolean cancelled = false;
 
-        // Try to cancel scheduled task
         ScheduledFuture<?> scheduledFuture = scheduledTasks.remove(taskName);
         if (scheduledFuture != null && !scheduledFuture.isDone()) {
             scheduledFuture.cancel(true);
             cancelled = true;
         }
 
-        // Try to cancel named task
         CompletableFuture<?> runningTask = runningTasks.remove(taskName);
         if (runningTask != null && !runningTask.isDone()) {
             runningTask.cancel(true);
@@ -238,25 +231,6 @@ public class ThreadUtil {
     }
 
     /**
-     * Shutdown executors if no tasks are running and no players are online
-     * This conserves resources when the server is idle
-     */
-    public static synchronized void shutdownIfIdle() {
-        if (Bukkit.getOnlinePlayers().isEmpty() && !hasRunningTasks()) {
-            if (executor != null && !executor.isShutdown()) {
-                executor.shutdown();
-            }
-
-            if (scheduledExecutor != null && !scheduledExecutor.isShutdown()) {
-                scheduledExecutor.shutdown();
-            }
-
-            executorsShutdown = true;
-            Bukkit.getLogger().info("[SimpleTabList] Thread pools shut down due to server being idle");
-        }
-    }
-
-    /**
      * Cancel all tasks and perform graceful shutdown
      */
     public static void shutdown() {
@@ -279,10 +253,24 @@ public class ThreadUtil {
         // Shutdown executors gracefully
         if (executor != null && !executor.isShutdown()) {
             executor.shutdown();
+            try {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+            }
         }
 
         if (scheduledExecutor != null && !scheduledExecutor.isShutdown()) {
             scheduledExecutor.shutdown();
+            try {
+                if (!scheduledExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduledExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduledExecutor.shutdownNow();
+            }
         }
 
         executorsShutdown = true;

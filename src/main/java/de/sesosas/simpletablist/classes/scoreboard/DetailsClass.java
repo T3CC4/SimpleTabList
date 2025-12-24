@@ -1,15 +1,17 @@
 package de.sesosas.simpletablist.classes.scoreboard;
 
+import de.sesosas.simpletablist.animation.AnimationManager;
 import de.sesosas.simpletablist.api.utils.StringUtil;
 import de.sesosas.simpletablist.api.utils.WorldUtil;
-import de.sesosas.simpletablist.classes.AnimationClass;
 import de.sesosas.simpletablist.config.CurrentConfig;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import java.util.List;
-import java.util.function.Supplier;
 
+/**
+ * DetailsClass using new AnimationManager
+ */
 public class DetailsClass {
 
     public static synchronized void updateTab(Player player) {
@@ -23,8 +25,8 @@ public class DetailsClass {
                 updateTabForWorld(player, headerContent, footerContent);
             }
         } catch (Exception e) {
-            Bukkit.getLogger().warning("Found an error at Header or Footer config section! Please make sure there are lists with content!");
-            Bukkit.getLogger().warning((Supplier<String>) e);
+            Bukkit.getLogger().warning("[SimpleTabList] Found an error at Header or Footer config section! Please make sure there are lists with content!");
+            Bukkit.getLogger().warning("[SimpleTabList] Error details: " + e.getMessage());
         }
     }
 
@@ -36,18 +38,22 @@ public class DetailsClass {
     private static void updateTabContent(Player player, String section, List<String> contentList, boolean isHeader) {
         if (CurrentConfig.getBoolean(section + ".Enable") && contentList != null) {
             String contentString = buildContentString(contentList, isHeader);
-            if(isHeader){
-                player.setPlayerListHeader(StringUtil.Convert(AnimationClass.convertAnimatedText(contentString), player));
+
+            // Process animations using new AnimationManager
+            String processedContent = AnimationManager.processAnimations(contentString);
+
+            // Process placeholders and colors
+            String finalContent = StringUtil.Convert(processedContent, player);
+
+            if (isHeader) {
+                player.setPlayerListHeader(finalContent);
+            } else {
+                player.setPlayerListFooter(finalContent);
             }
-            else{
-                player.setPlayerListFooter(StringUtil.Convert(AnimationClass.convertAnimatedText(contentString), player));
-            }
-        }
-        else{
-            if(isHeader){
+        } else {
+            if (isHeader) {
                 player.setPlayerListHeader("");
-            }
-            else{
+            } else {
                 player.setPlayerListFooter("");
             }
         }
@@ -56,10 +62,9 @@ public class DetailsClass {
     private static String buildContentString(List<String> contentList, boolean isHeader) {
         StringBuilder contentString = new StringBuilder();
         for (Object str : contentList) {
-            if(isHeader){
+            if (isHeader) {
                 contentString.append(str).append("\n");
-            }
-            else{
+            } else {
                 contentString.append("\n").append(str);
             }
         }

@@ -3,11 +3,14 @@ package de.sesosas.simpletablist;
 import de.sesosas.simpletablist.api.classes.AInterval;
 import de.sesosas.simpletablist.api.utils.ThreadUtil;
 import de.sesosas.simpletablist.api.utils.WorldUtil;
+import de.sesosas.simpletablist.animation.AnimationManager;
+import de.sesosas.simpletablist.cache.PlayerDataCache;
 import de.sesosas.simpletablist.classes.UpdateClass;
 import de.sesosas.simpletablist.classes.scoreboard.NamesClass;
 import de.sesosas.simpletablist.classes.scoreboard.SidebarClass;
 import de.sesosas.simpletablist.command.ReloadCommand;
 import de.sesosas.simpletablist.command.SidebarCommand;
+import de.sesosas.simpletablist.command.AnimationCommand;
 import de.sesosas.simpletablist.config.SidebarConfig;
 import de.sesosas.simpletablist.event.IEventHandler;
 import de.sesosas.simpletablist.classes.ScoreboardClass;
@@ -17,18 +20,20 @@ import net.luckperms.api.LuckPerms;
 import net.luckperms.api.event.EventBus;
 import net.luckperms.api.event.LuckPermsEvent;
 import net.luckperms.api.event.node.NodeAddEvent;
+import net.luckperms.api.event.node.NodeRemoveEvent;
+import net.luckperms.api.event.user.UserDataRecalculateEvent;
 import org.bstats.bukkit.Metrics;
 import org.bstats.charts.SingleLineChart;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.entity.Player;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import de.sesosas.simpletablist.classes.AnimationClass;
+import java.util.UUID;
 
 public final class SimpleTabList extends JavaPlugin implements Listener {
 
@@ -50,18 +55,22 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
         // Initialize scoreboard
         NamesClass.initScoreboard();
 
-        // Set up configuration defaults
+        // Set up configuration defaults FIRST
         setupDefaultConfig();
 
-        // Load sidebar configuration
+        // Load sidebar configuration BEFORE AnimationManager
         SidebarConfig.loadConfig();
+
+        // NOW initialize animation system (after configs exist)
+        AnimationManager.initialize();
+
+        // Initialize sidebar display
         SidebarClass.initialize();
 
-        // Generate world and animation configs
+        // Generate world configs
         WorldUtil.GenerateWorldConfig();
-        AnimationClass.GenerateAnimationExample();
 
-        // Set up LuckPerms integration
+        // Set up LuckPerms integration with cache invalidation
         setupLuckPerms();
 
         // Set up metrics if enabled
@@ -83,8 +92,18 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(new IEventHandler(), this);
         getCommand("stl-reload").setExecutor(new ReloadCommand());
         getCommand("sidebar").setExecutor(new SidebarCommand());
+        getCommand("animation").setExecutor(new AnimationCommand());
 
-        Bukkit.getLogger().info("Simple TabList has started!");
+        // Do initial scoreboard update after everything is initialized
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            ScoreboardClass.Update();
+            Bukkit.getLogger().info("[SimpleTabList] Initial scoreboard update completed");
+        }, 20L); // 1 second delay
+
+        // Start cache cleanup task
+        startCacheCleanupTask();
+
+        Bukkit.getLogger().info("Simple TabList has started with PlayerDataCache!");
     }
 
     private void setupDefaultConfig() {
@@ -110,6 +129,8 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
         config.addDefault("Tab.Refresh.Interval.Time", 1L);
         config.addDefault("bstats.Enable", true);
         config.addDefault("Performance.AsyncThreads", true);
+        config.addDefault("Performance.Cache.TTL", 30);
+        config.addDefault("Performance.Cache.CleanupInterval", 60);
         config.options().copyDefaults(true);
 
         List<String> headerComment = new ArrayList<>();
@@ -119,6 +140,8 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
         headerComment.add("You need LuckPerms and PlaceholderAPI to make this plugin work!\n");
         headerComment.add("Tab Refresh Interval Time is calculated in seconds.\n");
         headerComment.add("Performance.AsyncThreads: Set to true to run operations asynchronously for better performance.\n");
+        headerComment.add("Performance.Cache.TTL: Cache time-to-live in seconds (default: 30)\n");
+        headerComment.add("Performance.Cache.CleanupInterval: How often to clean expired cache entries in seconds (default: 60)\n");
         config.options().header(headerComment.toString().replace("[", "").replace("]", "").replace(", ", ""));
         saveConfig();
     }
@@ -129,7 +152,16 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
             LuckPerms luckPerms = provider.getProvider();
             EventBus eventBus = luckPerms.getEventBus();
 
-            eventBus.subscribe(plugin, NodeAddEvent.class, this::onNodeAddEvent);
+            // Listen to node add events
+            eventBus.subscribe(plugin, NodeAddEvent.class, this::onNodeChange);
+
+            // Listen to node remove events
+            eventBus.subscribe(plugin, NodeRemoveEvent.class, this::onNodeChange);
+
+            // Listen to user data recalculate events
+            eventBus.subscribe(plugin, UserDataRecalculateEvent.class, this::onUserDataRecalculate);
+
+            Bukkit.getLogger().info("[SimpleTabList] LuckPerms integration with cache invalidation enabled");
         } else {
             Bukkit.getLogger().warning("LuckPerms not found! Some features will not work properly.");
         }
@@ -139,6 +171,7 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
         int id = 15221;
         Metrics metrics = new Metrics(this, id);
         metrics.addCustomChart(new SingleLineChart("banned", () -> Bukkit.getBannedPlayers().size()));
+        metrics.addCustomChart(new SingleLineChart("cached_players", PlayerDataCache::size));
         Bukkit.getLogger().info("bStats metrics enabled");
     }
 
@@ -152,6 +185,23 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
         });
     }
 
+    /**
+     * Start cache cleanup task
+     */
+    private void startCacheCleanupTask() {
+        long cleanupInterval = config.getLong("Performance.Cache.CleanupInterval", 60);
+
+        Bukkit.getScheduler().runTaskTimerAsynchronously(this, () -> {
+            int sizeBefore = PlayerDataCache.size();
+            PlayerDataCache.cleanupExpired();
+            int sizeAfter = PlayerDataCache.size();
+
+            if (sizeBefore > sizeAfter) {
+                Bukkit.getLogger().info("[SimpleTabList] Cache cleanup: removed " + (sizeBefore - sizeAfter) + " expired entries");
+            }
+        }, cleanupInterval * 20L, cleanupInterval * 20L);
+    }
+
     @Override
     public void onDisable(){
         // Clean up player scoreboards
@@ -162,6 +212,9 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
 
         // Stop all intervals
         AInterval.stopAllIntervals();
+
+        // Clear all caches
+        PlayerDataCache.clearAll();
 
         // Graceful shutdown of thread pools
         ThreadUtil.shutdown();
@@ -179,8 +232,59 @@ public final class SimpleTabList extends JavaPlugin implements Listener {
         Bukkit.getLogger().info("Simple TabList has been disabled");
     }
 
-    private <T extends LuckPermsEvent> void onNodeAddEvent(T t) {
-        // Run scoreboard update asynchronously
-        ThreadUtil.submitTask(ScoreboardClass::Update);
+    /**
+     * Handle LuckPerms node changes (add/remove)
+     */
+    private <T extends LuckPermsEvent> void onNodeChange(T event) {
+        // Extract UUID from event
+        UUID affectedUser = null;
+
+        if (event instanceof NodeAddEvent) {
+            NodeAddEvent nodeEvent = (NodeAddEvent) event;
+            if (nodeEvent.isUser()) {
+                // Get UUID from Identifier
+                net.luckperms.api.model.user.User user = (net.luckperms.api.model.user.User) nodeEvent.getTarget();
+                affectedUser = user.getUniqueId();
+            }
+        } else if (event instanceof NodeRemoveEvent) {
+            NodeRemoveEvent nodeEvent = (NodeRemoveEvent) event;
+            if (nodeEvent.isUser()) {
+                // Get UUID from Identifier
+                net.luckperms.api.model.user.User user = (net.luckperms.api.model.user.User) nodeEvent.getTarget();
+                affectedUser = user.getUniqueId();
+            }
+        }
+
+        // Invalidate cache for affected user
+        if (affectedUser != null) {
+            final UUID userId = affectedUser;
+            PlayerDataCache.invalidate(userId);
+
+            // Update scoreboard for online player
+            Player player = Bukkit.getPlayer(userId);
+            if (player != null && player.isOnline()) {
+                ThreadUtil.submitTask(() -> {
+                    ScoreboardClass.Update();
+                });
+            }
+        }
+    }
+
+    /**
+     * Handle LuckPerms user data recalculate
+     */
+    private void onUserDataRecalculate(UserDataRecalculateEvent event) {
+        UUID userId = event.getUser().getUniqueId();
+
+        // Invalidate cache
+        PlayerDataCache.invalidate(userId);
+
+        // Update scoreboard for online player
+        Player player = Bukkit.getPlayer(userId);
+        if (player != null && player.isOnline()) {
+            ThreadUtil.submitTask(() -> {
+                ScoreboardClass.Update();
+            });
+        }
     }
 }

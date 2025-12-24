@@ -15,3 +15,8 @@ commands:
     permission: stl.sidebar.toggle
     permission-message: §cYou are not allowed to use this command!
     aliases: [stl-sidebar, stlsidebar]
+  animation:
+    description: Manage animations (list, info, validate, reload, test)
+    permission: stl.animation
+    permission-message: §cYou are not allowed to use this command!
+    aliases: [anim, stl-animation]
