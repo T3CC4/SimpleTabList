@@ -1,0 +1,22 @@
+api-version: '1.16'
+name: SimpleTabList
+version: '${project.version}'
+main: de.sesosas.simpletablist.SimpleTabList
+authors: [ SESOSAS ]
+description: A TabList which is using LuckPerms Prefix and Suffixes
+depend: [LuckPerms, PlaceholderAPI]
+commands:
+  stl-reload:
+    description: Reload the plugin configurations
+    permission: stl.reload
+    permission-message: §cYou are not allowed to use this command!
+  sidebar:
+    description: Toggle sidebar visibility
+    permission: stl.sidebar.toggle
+    permission-message: §cYou are not allowed to use this command!
+    aliases: [stl-sidebar, stlsidebar]
+  animation:
+    description: Manage animations (list, info, validate, reload, test)
+    permission: stl.animation
+    permission-message: §cYou are not allowed to use this command!
+    aliases: [anim, stl-animation]
